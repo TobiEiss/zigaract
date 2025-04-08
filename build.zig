@@ -1,17 +1,19 @@
 const std = @import("std");
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     // Build tesseract from source
+    const build_root = b.build_root.path orelse "";
+    const prefix_path = b.pathJoin(&.{ build_root, "zig-out", "tesseract-lib" });
+
+    // Check if tesseract autogen.sh exists
     std.fs.cwd().access("./deps/tesseract/autogen.sh", .{}) catch |err| {
         std.debug.print("Error: {s}\n", .{@errorName(err)});
     };
 
-    // tesseract-lib path
-    const build_root = b.build_root.path orelse "";
-    const prefix_path = b.pathJoin(&.{ build_root, "zig-out", "tesseract-lib" });
-
+    // Build Tesseract
     // Autogen step
     var tesseract_autogen_args = std.ArrayList([]const u8).init(b.allocator);
     defer tesseract_autogen_args.deinit();
@@ -20,12 +22,11 @@ pub fn build(b: *std.Build) void {
     tesseract_autogen_args.append("cd ./deps/tesseract/ && ./autogen.sh") catch unreachable;
     const run_tesseract_autogen = b.addSystemCommand(tesseract_autogen_args.items);
 
-    // config arg
+    // Configure step
     var tesseract_configure_args = std.ArrayList([]const u8).init(b.allocator);
     defer tesseract_configure_args.deinit();
     tesseract_configure_args.append("sh") catch unreachable;
     tesseract_configure_args.append("-c") catch unreachable;
-    // tesseract_configure_args.append(b.fmt("cd ./deps/tesseract/ && ./configure --enable-debug --prefix=\"{s}\"", .{prefix_path})) catch unreachable;
     tesseract_configure_args.append(b.fmt("cd ./deps/tesseract/ && ./configure --enable-debug --prefix=\"{s}\" --enable-static --disable-shared", .{prefix_path})) catch unreachable;
     const run_tesseract_configure = b.addSystemCommand(tesseract_configure_args.items);
     run_tesseract_configure.step.dependOn(&run_tesseract_autogen.step);
@@ -50,39 +51,89 @@ pub fn build(b: *std.Build) void {
     const run_tesseract_make_install = b.addSystemCommand(tesseract_make_install_args.items);
     run_tesseract_make_install.step.dependOn(&run_tesseract_make.step);
 
-    // Create the executable
-    const exe = b.addExecutable(.{
+    // Create the library module
+    const zigaract_mod = b.addModule("zigaract", .{
+        .root_source_file = b.path("src/zigaract.zig"),
+    });
+    zigaract_mod.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "include", "tesseract" }) });
+
+    // Create static library
+    const lib = b.addStaticLibrary(.{
         .name = "zigaract",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/zigaract.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Include directories
-    exe.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "include", "tesseract" }) });
-    exe.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "lib" }) });
+    // Include directories for library (exact same as your original)
+    lib.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "include", "tesseract" }) });
+    lib.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "lib" }) });
+    lib.linkSystemLibrary("tesseract");
+    lib.linkLibCpp();
+    lib.pie = true;
 
-    // Use static linking instead of dynamic to avoid runtime library searching
-    exe.linkSystemLibrary("tesseract");
-    exe.linkLibCpp();
-
-    exe.pie = true;
-
-    // Dynamic linking
+    // Add rpath for macOS
     if (target.result.os.tag == .macos) {
         const dylib_path = b.pathJoin(&.{ prefix_path, "lib" });
-        exe.addRPath(.{ .cwd_relative = dylib_path });
+        lib.addRPath(.{ .cwd_relative = dylib_path });
     }
 
-    b.installArtifact(exe);
+    lib.step.dependOn(&run_tesseract_make_install.step);
+    b.installArtifact(lib);
 
-    // Make sure installation finishes before building the executable
-    exe.step.dependOn(&run_tesseract_make_install.step);
+    // Build example executable
+    const example_exe = b.addExecutable(.{
+        .name = "zigaract-example",
+        .root_source_file = b.path("examples/version.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
-    // build run step
-    const run_exe = b.addRunArtifact(exe);
+    // Add our module to the example
+    example_exe.root_module.addImport("zigaract", zigaract_mod);
 
-    // Make sure the project directory is clean and reusable for packagers
+    // Include directories for example (same as library)
+    example_exe.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "include", "tesseract" }) });
+    example_exe.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "lib" }) });
+    example_exe.linkSystemLibrary("tesseract");
+    example_exe.linkLibCpp();
+    example_exe.pie = true;
+
+    // Add rpath for macOS
+    if (target.result.os.tag == .macos) {
+        const dylib_path = b.pathJoin(&.{ prefix_path, "lib" });
+        example_exe.addRPath(.{ .cwd_relative = dylib_path });
+    }
+
+    example_exe.step.dependOn(&run_tesseract_make_install.step);
+    b.installArtifact(example_exe);
+
+    // Test step
+    const lib_tests = b.addTest(.{
+        .root_source_file = b.path("src/zigaract.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Include directories for tests (same as library)
+    lib_tests.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "include", "tesseract" }) });
+    lib_tests.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix_path, "lib" }) });
+    lib_tests.linkSystemLibrary("tesseract");
+    lib_tests.linkLibCpp();
+    lib_tests.pie = true;
+
+    // Add rpath for macOS
+    if (target.result.os.tag == .macos) {
+        const dylib_path = b.pathJoin(&.{ prefix_path, "lib" });
+        lib_tests.addRPath(.{ .cwd_relative = dylib_path });
+    }
+
+    lib_tests.step.dependOn(&run_tesseract_make_install.step);
+
+    const run_tests = b.addRunArtifact(lib_tests);
+    b.step("test", "Run tests").dependOn(&run_tests.step);
+
+    // Clean step
     var clean_tesseract_args = std.ArrayList([]const u8).init(b.allocator);
     defer clean_tesseract_args.deinit();
     clean_tesseract_args.append("sh") catch unreachable;
@@ -91,5 +142,9 @@ pub fn build(b: *std.Build) void {
     const clean_tesseract = b.addSystemCommand(clean_tesseract_args.items);
 
     b.step("clean", "Clean the project").dependOn(&clean_tesseract.step);
-    b.step("run", "Run the app").dependOn(&run_exe.step);
+
+    // Create a step that runs the example by default
+    const run_example = b.addRunArtifact(example_exe);
+    const run_step = b.step("run", "Run the example");
+    run_step.dependOn(&run_example.step);
 }
