@@ -1,6 +1,6 @@
 .{
     .name = .zigaract,
-    .version = "0.0.0",
+    .version = "0.0.1",
     .fingerprint = 0x66a47e59a3a40caa, // Changing this has security and trust implications.
     .minimum_zig_version = "0.14.0",
     .dependencies = .{},
