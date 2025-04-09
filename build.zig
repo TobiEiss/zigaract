@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Build tesseract from source
-    const build_root = b.build_root.path orelse "";
+    const build_root = comptime std.fs.path.dirname(@src().file) orelse "";
     const prefix_path = b.pathJoin(&.{ build_root, "zig-out", "tesseract-lib" });
 
     // Check if tesseract autogen.sh exists
