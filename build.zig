@@ -5,12 +5,14 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Build tesseract from source
-    const build_root = comptime std.fs.path.dirname(@src().file) orelse "";
+    const tesseract_path = comptime std.fs.path.dirname(@src().file) orelse "." ++ "/deps/tesseract/";
+    const build_root = b.build_root.path orelse "";
     const prefix_path = b.pathJoin(&.{ build_root, "zig-out", "tesseract-lib" });
 
     // Check if tesseract autogen.sh exists
-    std.fs.cwd().access("./deps/tesseract/autogen.sh", .{}) catch |err| {
-        std.debug.print("Error: {s}\n", .{@errorName(err)});
+    const autogen_path = tesseract_path ++ "/autogen.sh";
+    std.fs.cwd().access(autogen_path, .{}) catch |err| {
+        std.debug.print("Search for autogen here: {s}\nError: {s}\n", .{ autogen_path, @errorName(err) });
     };
 
     // Build Tesseract
@@ -19,7 +21,7 @@ pub fn build(b: *std.Build) void {
     defer tesseract_autogen_args.deinit();
     tesseract_autogen_args.append("sh") catch unreachable;
     tesseract_autogen_args.append("-c") catch unreachable;
-    tesseract_autogen_args.append("cd ./deps/tesseract/ && ./autogen.sh") catch unreachable;
+    tesseract_autogen_args.append(b.fmt("cd {s} && ./autogen.sh", .{tesseract_path})) catch unreachable;
     const run_tesseract_autogen = b.addSystemCommand(tesseract_autogen_args.items);
 
     // Configure step
@@ -27,7 +29,7 @@ pub fn build(b: *std.Build) void {
     defer tesseract_configure_args.deinit();
     tesseract_configure_args.append("sh") catch unreachable;
     tesseract_configure_args.append("-c") catch unreachable;
-    tesseract_configure_args.append(b.fmt("cd ./deps/tesseract/ && ./configure --enable-debug --prefix=\"{s}\" --enable-static --disable-shared", .{prefix_path})) catch unreachable;
+    tesseract_configure_args.append(b.fmt("cd {s} && ./configure --enable-debug --prefix=\"{s}\" --enable-static --disable-shared", .{ tesseract_path, prefix_path })) catch unreachable;
     const run_tesseract_configure = b.addSystemCommand(tesseract_configure_args.items);
     run_tesseract_configure.step.dependOn(&run_tesseract_autogen.step);
 
@@ -36,7 +38,7 @@ pub fn build(b: *std.Build) void {
     defer tesseract_make_args.deinit();
     tesseract_make_args.append("sh") catch unreachable;
     tesseract_make_args.append("-c") catch unreachable;
-    tesseract_make_args.append("cd ./deps/tesseract/ && make") catch unreachable;
+    tesseract_make_args.append(b.fmt("cd {s} && make", .{tesseract_path})) catch unreachable;
     const cpu_count = std.Thread.getCpuCount() catch 1;
     tesseract_make_args.append(b.fmt("-j{d}", .{cpu_count})) catch unreachable;
     const run_tesseract_make = b.addSystemCommand(tesseract_make_args.items);
@@ -47,7 +49,7 @@ pub fn build(b: *std.Build) void {
     defer tesseract_make_install_args.deinit();
     tesseract_make_install_args.append("sh") catch unreachable;
     tesseract_make_install_args.append("-c") catch unreachable;
-    tesseract_make_install_args.append("cd ./deps/tesseract/ && make install") catch unreachable;
+    tesseract_make_install_args.append(b.fmt("cd {s} && make install", .{tesseract_path})) catch unreachable;
     const run_tesseract_make_install = b.addSystemCommand(tesseract_make_install_args.items);
     run_tesseract_make_install.step.dependOn(&run_tesseract_make.step);
 
